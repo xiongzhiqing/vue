@@ -1,5 +1,6 @@
 /* @flow */
 
+import { createPromiseCallback } from '../util'
 import { createBundleRunner } from './create-bundle-runner'
 import type { Renderer, RenderOptions } from '../create-renderer'
 import { createSourceMapConsumers, rewriteErrorTrace } from './source-map-support'
@@ -27,14 +28,15 @@ type RenderBundle = {
   modules?: { [filename: string]: Array<string> };
 };
 
-export function createBundleRendererCreator (createRenderer: () => Renderer) {
+export function createBundleRendererCreator (
+  createRenderer: (options?: RenderOptions) => Renderer
+) {
   return function createBundleRenderer (
     bundle: string | RenderBundle,
     rendererOptions?: RenderOptions = {}
   ) {
     let files, entry, maps
     let basedir = rendererOptions.basedir
-    const runInNewContext = rendererOptions.runInNewContext !== false
 
     // load bundle if given filepath
     if (
@@ -76,25 +78,38 @@ export function createBundleRendererCreator (createRenderer: () => Renderer) {
 
     const renderer = createRenderer(rendererOptions)
 
-    const run = createBundleRunner(entry, files, basedir, runInNewContext)
+    const run = createBundleRunner(
+      entry,
+      files,
+      basedir,
+      rendererOptions.runInNewContext
+    )
 
     return {
-      renderToString: (context?: Object, cb: (err: ?Error, res: ?string) => void) => {
+      renderToString: (context?: Object, cb: any) => {
         if (typeof context === 'function') {
           cb = context
           context = {}
         }
+
+        let promise
+        if (!cb) {
+          ({ promise, cb } = createPromiseCallback())
+        }
+
         run(context).catch(err => {
           rewriteErrorTrace(err, maps)
           cb(err)
         }).then(app => {
           if (app) {
-            renderer.renderToString(app, (err, res) => {
+            renderer.renderToString(app, context, (err, res) => {
               rewriteErrorTrace(err, maps)
               cb(err, res)
-            }, context)
+            })
           }
         })
+
+        return promise
       },
 
       renderToStream: (context?: Object) => {

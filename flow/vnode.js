@@ -1,4 +1,4 @@
-declare type VNodeChildren = Array<?VNode | string | VNodeChildren> | string
+declare type VNodeChildren = Array<?VNode | string | VNodeChildren> | string;
 
 declare type VNodeComponentOptions = {
   Ctor: Class<Component>;
@@ -6,7 +6,7 @@ declare type VNodeComponentOptions = {
   listeners: ?Object;
   children: ?Array<VNode>;
   tag?: string;
-}
+};
 
 declare type MountedComponentVNode = {
   context: Component;
@@ -14,7 +14,7 @@ declare type MountedComponentVNode = {
   componentInstance: Component;
   parent: VNode;
   data: VNodeData;
-}
+};
 
 // interface for vnodes in update modules
 declare type VNodeWithData = {
@@ -27,20 +27,22 @@ declare type VNodeWithData = {
   context: Component;
   key: string | number | void;
   parent?: VNodeWithData;
+  componentOptions?: VNodeComponentOptions;
   componentInstance?: Component;
   isRootInsert: boolean;
-}
+};
 
 declare interface VNodeData {
   key?: string | number;
   slot?: string;
   ref?: string;
+  is?: string;
   pre?: boolean;
   tag?: string;
   staticClass?: string;
   class?: any;
   staticStyle?: { [key: string]: any };
-  style?: Array<Object> | Object;
+  style?: string | Array<Object> | Object;
   normalizedStyle?: Object;
   props?: { [key: string]: any };
   attrs?: { [key: string]: string };
@@ -61,7 +63,7 @@ declare interface VNodeData {
     value: any;
     callback: Function;
   };
-}
+};
 
 declare type VNodeDirective = {
   name: string;
@@ -69,6 +71,9 @@ declare type VNodeDirective = {
   value?: any;
   oldValue?: any;
   arg?: string;
+  oldArg?: string;
   modifiers?: ASTModifiers;
   def?: Object;
-}
+};
+
+declare type ScopedSlotsData = Array<{ key: string, fn: Function } | ScopedSlotsData>;

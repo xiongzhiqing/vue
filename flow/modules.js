@@ -10,6 +10,7 @@ declare module 'source-map' {
     toString(): string;
   }
   declare class SourceMapConsumer {
+    constructor (map: Object): void;
     originalPositionFor(position: { line: number; column: number; }): {
       source: ?string;
       line: ?number;
@@ -33,5 +34,11 @@ declare module 'de-indent' {
 declare module 'serialize-javascript' {
   declare var exports: {
     (input: string, options: { isJSON: boolean }): string
+  }
+}
+
+declare module 'lodash.template' {
+  declare var exports: {
+    (input: string, options: { interpolate: RegExp, escape: RegExp }): Function
   }
 }

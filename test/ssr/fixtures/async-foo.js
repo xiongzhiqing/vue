@@ -1,12 +1,11 @@
-/* globals __VUE_SSR_CONTEXT__ */
-
 // import image and font
+import './test.css'
 import font from './test.woff2'
 import image from './test.png'
 
-module.exports = {
+export default {
   beforeCreate () {
-    __VUE_SSR_CONTEXT__._registeredComponents.add('__MODULE_ID__')
+    this.$vnode.ssrContext._registeredComponents.add('__MODULE_ID__')
   },
   render (h) {
     return h('div', `async ${font} ${image}`)

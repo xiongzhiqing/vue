@@ -57,7 +57,7 @@ export function enter (vnode: VNodeWithData, toggleDisplay: ?() => void) {
     afterAppear,
     appearCancelled,
     duration
-  } = (data: any)
+  } = data
 
   // activeInstance will always be the <transition> component managing this
   // transition. One edge case to check is when the <transition> is placed
@@ -66,8 +66,8 @@ export function enter (vnode: VNodeWithData, toggleDisplay: ?() => void) {
   let context = activeInstance
   let transitionNode = activeInstance.$vnode
   while (transitionNode && transitionNode.parent) {
-    transitionNode = transitionNode.parent
     context = transitionNode.context
+    transitionNode = transitionNode.parent
   }
 
   const isAppear = !context._isMounted || !vnode.isRootInsert
@@ -130,12 +130,13 @@ export function enter (vnode: VNodeWithData, toggleDisplay: ?() => void) {
 
   if (!vnode.data.show) {
     // remove pending leave element on enter by injecting an insert hook
-    mergeVNodeHook(vnode.data.hook || (vnode.data.hook = {}), 'insert', () => {
+    mergeVNodeHook(vnode, 'insert', () => {
       const parent = el.parentNode
       const pendingNode = parent && parent._pending && parent._pending[vnode.key]
       if (pendingNode &&
-          pendingNode.tag === vnode.tag &&
-          pendingNode.elm._leaveCb) {
+        pendingNode.tag === vnode.tag &&
+        pendingNode.elm._leaveCb
+      ) {
         pendingNode.elm._leaveCb()
       }
       enterHook && enterHook(el, cb)
@@ -148,13 +149,15 @@ export function enter (vnode: VNodeWithData, toggleDisplay: ?() => void) {
     addTransitionClass(el, startClass)
     addTransitionClass(el, activeClass)
     nextFrame(() => {
-      addTransitionClass(el, toClass)
       removeTransitionClass(el, startClass)
-      if (!cb.cancelled && !userWantsControl) {
-        if (isValidDuration(explicitEnterDuration)) {
-          setTimeout(cb, explicitEnterDuration)
-        } else {
-          whenTransitionEnds(el, type, cb)
+      if (!cb.cancelled) {
+        addTransitionClass(el, toClass)
+        if (!userWantsControl) {
+          if (isValidDuration(explicitEnterDuration)) {
+            setTimeout(cb, explicitEnterDuration)
+          } else {
+            whenTransitionEnds(el, type, cb)
+          }
         }
       }
     })
@@ -180,12 +183,12 @@ export function leave (vnode: VNodeWithData, rm: Function) {
   }
 
   const data = resolveTransition(vnode.data.transition)
-  if (isUndef(data)) {
+  if (isUndef(data) || el.nodeType !== 1) {
     return rm()
   }
 
   /* istanbul ignore if */
-  if (isDef(el._leaveCb) || el.nodeType !== 1) {
+  if (isDef(el._leaveCb)) {
     return
   }
 
@@ -201,7 +204,7 @@ export function leave (vnode: VNodeWithData, rm: Function) {
     leaveCancelled,
     delayLeave,
     duration
-  } = (data: any)
+  } = data
 
   const expectsCSS = css !== false && !isIE9
   const userWantsControl = getHookArgumentsLength(leave)
@@ -212,7 +215,7 @@ export function leave (vnode: VNodeWithData, rm: Function) {
       : duration
   )
 
-  if (process.env.NODE_ENV !== 'production' && explicitLeaveDuration != null) {
+  if (process.env.NODE_ENV !== 'production' && isDef(explicitLeaveDuration)) {
     checkDuration(explicitLeaveDuration, 'leave', vnode)
   }
 
@@ -248,21 +251,23 @@ export function leave (vnode: VNodeWithData, rm: Function) {
       return
     }
     // record leaving element
-    if (!vnode.data.show) {
-      (el.parentNode._pending || (el.parentNode._pending = {}))[vnode.key] = vnode
+    if (!vnode.data.show && el.parentNode) {
+      (el.parentNode._pending || (el.parentNode._pending = {}))[(vnode.key: any)] = vnode
     }
     beforeLeave && beforeLeave(el)
     if (expectsCSS) {
       addTransitionClass(el, leaveClass)
       addTransitionClass(el, leaveActiveClass)
       nextFrame(() => {
-        addTransitionClass(el, leaveToClass)
         removeTransitionClass(el, leaveClass)
-        if (!cb.cancelled && !userWantsControl) {
-          if (isValidDuration(explicitLeaveDuration)) {
-            setTimeout(cb, explicitLeaveDuration)
-          } else {
-            whenTransitionEnds(el, type, cb)
+        if (!cb.cancelled) {
+          addTransitionClass(el, leaveToClass)
+          if (!userWantsControl) {
+            if (isValidDuration(explicitLeaveDuration)) {
+              setTimeout(cb, explicitLeaveDuration)
+            } else {
+              whenTransitionEnds(el, type, cb)
+            }
           }
         }
       })

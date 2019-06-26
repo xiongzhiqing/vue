@@ -1,32 +1,45 @@
 /* @flow */
 
-const { escape } = require('he')
-
+import { escape } from 'web/server/util'
 import { SSR_ATTR } from 'shared/constants'
 import { RenderContext } from './render-context'
-import { compileToFunctions } from 'web/compiler/index'
-import { createComponentInstanceForVnode } from 'core/vdom/create-component'
+import { resolveAsset } from 'core/util/options'
+import { generateComponentTrace } from 'core/util/debug'
+import { ssrCompileToFunctions } from 'web/server/compiler'
+import { installSSRHelpers } from './optimizing-compiler/runtime-helpers'
 
 import { isDef, isUndef, isTrue } from 'shared/util'
+
+import {
+  createComponent,
+  createComponentInstanceForVnode
+} from 'core/vdom/create-component'
 
 let warned = Object.create(null)
 const warnOnce = msg => {
   if (!warned[msg]) {
     warned[msg] = true
+    // eslint-disable-next-line no-console
     console.warn(`\n\u001b[31m${msg}\u001b[39m\n`)
   }
 }
 
-const compilationCache = Object.create(null)
+const onCompilationError = (err, vm) => {
+  const trace = vm ? generateComponentTrace(vm) : ''
+  throw new Error(`\n\u001b[31m${err}${trace}\u001b[39m\n`)
+}
+
 const normalizeRender = vm => {
-  const { render, template } = vm.$options
+  const { render, template, _scopeId } = vm.$options
   if (isUndef(render)) {
     if (template) {
-      const renderFns = (
-        compilationCache[template] ||
-        (compilationCache[template] = compileToFunctions(template))
-      )
-      Object.assign(vm.$options, renderFns)
+      const compiled = ssrCompileToFunctions(template, {
+        scopeId: _scopeId,
+        warn: onCompilationError
+      }, vm)
+
+      vm.$options.render = compiled.render
+      vm.$options.staticRenderFns = compiled.staticRenderFns
     } else {
       throw new Error(
         `render function or template not defined in component: ${
@@ -37,24 +50,57 @@ const normalizeRender = vm => {
   }
 }
 
-function renderNode (node, isRoot, context) {
-  if (isDef(node.componentOptions)) {
-    renderComponent(node, isRoot, context)
-  } else {
-    if (isDef(node.tag)) {
-      renderElement(node, isRoot, context)
-    } else if (isTrue(node.isComment)) {
-      context.write(
-        `<!--${node.text}-->`,
-        context.next
-      )
-    } else {
-      context.write(
-        node.raw ? node.text : escape(String(node.text)),
-        context.next
-      )
+function waitForServerPrefetch (vm, resolve, reject) {
+  let handlers = vm.$options.serverPrefetch
+  if (isDef(handlers)) {
+    if (!Array.isArray(handlers)) handlers = [handlers]
+    try {
+      const promises = []
+      for (let i = 0, j = handlers.length; i < j; i++) {
+        const result = handlers[i].call(vm, vm)
+        if (result && typeof result.then === 'function') {
+          promises.push(result)
+        }
+      }
+      Promise.all(promises).then(resolve).catch(reject)
+      return
+    } catch (e) {
+      reject(e)
     }
   }
+  resolve()
+}
+
+function renderNode (node, isRoot, context) {
+  if (node.isString) {
+    renderStringNode(node, context)
+  } else if (isDef(node.componentOptions)) {
+    renderComponent(node, isRoot, context)
+  } else if (isDef(node.tag)) {
+    renderElement(node, isRoot, context)
+  } else if (isTrue(node.isComment)) {
+    if (isDef(node.asyncFactory)) {
+      // async component
+      renderAsyncComponent(node, isRoot, context)
+    } else {
+      context.write(`<!--${node.text}-->`, context.next)
+    }
+  } else {
+    context.write(
+      node.raw ? node.text : escape(String(node.text)),
+      context.next
+    )
+  }
+}
+
+function registerComponentForCache (options, write) {
+  // exposed by vue-loader, need to call this if cache hit because
+  // component lifecycle hooks will not be called.
+  const register = options._ssrRegister
+  if (write.caching && isDef(register)) {
+    write.componentBuffer[write.componentBuffer.length - 1].add(register)
+  }
+  return register
 }
 
 function renderComponent (node, isRoot, context) {
@@ -64,22 +110,21 @@ function renderComponent (node, isRoot, context) {
   const Ctor = node.componentOptions.Ctor
   const getKey = Ctor.options.serverCacheKey
   const name = Ctor.options.name
-
-  // exposed by vue-loader, need to call this if cache hit because
-  // component lifecycle hooks will not be called.
-  const registerComponent = Ctor.options._ssrRegister
-  if (write.caching && isDef(registerComponent)) {
-    write.componentBuffer[write.componentBuffer.length - 1].add(registerComponent)
-  }
-
   const cache = context.cache
+  const registerComponent = registerComponentForCache(Ctor.options, write)
+
   if (isDef(getKey) && isDef(cache) && isDef(name)) {
-    const key = name + '::' + getKey(node.componentOptions.propsData)
+    const rawKey = getKey(node.componentOptions.propsData)
+    if (rawKey === false) {
+      renderComponentInner(node, isRoot, context)
+      return
+    }
+    const key = name + '::' + rawKey
     const { has, get } = context
     if (isDef(has)) {
-      (has: any)(key, hit => {
+      has(key, hit => {
         if (hit === true && isDef(get)) {
-          (get: any)(key, res => {
+          get(key, res => {
             if (isDef(registerComponent)) {
               registerComponent(userContext)
             }
@@ -91,7 +136,7 @@ function renderComponent (node, isRoot, context) {
         }
       })
     } else if (isDef(get)) {
-      (get: any)(key, res => {
+      get(key, res => {
         if (isDef(res)) {
           if (isDef(registerComponent)) {
             registerComponent(userContext)
@@ -141,29 +186,126 @@ function renderComponentWithCache (node, isRoot, key, context) {
 
 function renderComponentInner (node, isRoot, context) {
   const prevActive = context.activeInstance
+  // expose userContext on vnode
+  node.ssrContext = context.userContext
   const child = context.activeInstance = createComponentInstanceForVnode(
     node,
     context.activeInstance
   )
   normalizeRender(child)
-  const childNode = child._render()
-  childNode.parent = node
-  context.renderStates.push({
-    type: 'Component',
-    prevActive
-  })
-  renderNode(childNode, isRoot, context)
+
+  const resolve = () => {
+    const childNode = child._render()
+    childNode.parent = node
+    context.renderStates.push({
+      type: 'Component',
+      prevActive
+    })
+    renderNode(childNode, isRoot, context)
+  }
+
+  const reject = context.done
+
+  waitForServerPrefetch(child, resolve, reject)
+}
+
+function renderAsyncComponent (node, isRoot, context) {
+  const factory = node.asyncFactory
+
+  const resolve = comp => {
+    if (comp.__esModule && comp.default) {
+      comp = comp.default
+    }
+    const { data, children, tag } = node.asyncMeta
+    const nodeContext = node.asyncMeta.context
+    const resolvedNode: any = createComponent(
+      comp,
+      data,
+      nodeContext,
+      children,
+      tag
+    )
+    if (resolvedNode) {
+      if (resolvedNode.componentOptions) {
+        // normal component
+        renderComponent(resolvedNode, isRoot, context)
+      } else if (!Array.isArray(resolvedNode)) {
+        // single return node from functional component
+        renderNode(resolvedNode, isRoot, context)
+      } else {
+        // multiple return nodes from functional component
+        context.renderStates.push({
+          type: 'Fragment',
+          children: resolvedNode,
+          rendered: 0,
+          total: resolvedNode.length
+        })
+        context.next()
+      }
+    } else {
+      // invalid component, but this does not throw on the client
+      // so render empty comment node
+      context.write(`<!---->`, context.next)
+    }
+  }
+
+  if (factory.resolved) {
+    resolve(factory.resolved)
+    return
+  }
+
+  const reject = context.done
+  let res
+  try {
+    res = factory(resolve, reject)
+  } catch (e) {
+    reject(e)
+  }
+  if (res) {
+    if (typeof res.then === 'function') {
+      res.then(resolve, reject).catch(reject)
+    } else {
+      // new syntax in 2.3
+      const comp = res.component
+      if (comp && typeof comp.then === 'function') {
+        comp.then(resolve, reject).catch(reject)
+      }
+    }
+  }
+}
+
+function renderStringNode (el, context) {
+  const { write, next } = context
+  if (isUndef(el.children) || el.children.length === 0) {
+    write(el.open + (el.close || ''), next)
+  } else {
+    const children: Array<VNode> = el.children
+    context.renderStates.push({
+      type: 'Element',
+      children,
+      rendered: 0,
+      total: children.length,
+      endTag: el.close
+    })
+    write(el.open, next)
+  }
 }
 
 function renderElement (el, isRoot, context) {
+  const { write, next } = context
+
   if (isTrue(isRoot)) {
     if (!el.data) el.data = {}
     if (!el.data.attrs) el.data.attrs = {}
     el.data.attrs[SSR_ATTR] = 'true'
   }
+
+  if (el.fnOptions) {
+    registerComponentForCache(el.fnOptions, write)
+  }
+
   const startTag = renderStartingTag(el, context)
   const endTag = `</${el.tag}>`
-  const { write, next } = context
   if (context.isUnaryTag(el.tag)) {
     write(startTag, next)
   } else if (isUndef(el.children) || el.children.length === 0) {
@@ -172,9 +314,10 @@ function renderElement (el, isRoot, context) {
     const children: Array<VNode> = el.children
     context.renderStates.push({
       type: 'Element',
+      children,
       rendered: 0,
       total: children.length,
-      endTag, children
+      endTag
     })
     write(startTag, next)
   }
@@ -216,11 +359,13 @@ function renderStartingTag (node: VNode, context) {
     if (dirs) {
       for (let i = 0; i < dirs.length; i++) {
         const name = dirs[i].name
-        const dirRenderer = directives[name]
-        if (dirRenderer && name !== 'show') {
-          // directives mutate the node's data
-          // which then gets rendered by modules
-          dirRenderer(node, dirs[i])
+        if (name !== 'show') {
+          const dirRenderer = resolveAsset(context, 'directives', name)
+          if (dirRenderer) {
+            // directives mutate the node's data
+            // which then gets rendered by modules
+            dirRenderer(node, dirs[i])
+          }
         }
       }
     }
@@ -243,21 +388,26 @@ function renderStartingTag (node: VNode, context) {
   let scopeId
   const activeInstance = context.activeInstance
   if (isDef(activeInstance) &&
-      activeInstance !== node.context &&
-      isDef(scopeId = activeInstance.$options._scopeId)) {
+    activeInstance !== node.context &&
+    isDef(scopeId = activeInstance.$options._scopeId)
+  ) {
     markup += ` ${(scopeId: any)}`
   }
-  while (isDef(node)) {
-    if (isDef(scopeId = node.context.$options._scopeId)) {
-      markup += ` ${scopeId}`
+  if (isDef(node.fnScopeId)) {
+    markup += ` ${node.fnScopeId}`
+  } else {
+    while (isDef(node)) {
+      if (isDef(scopeId = node.context.$options._scopeId)) {
+        markup += ` ${scopeId}`
+      }
+      node = node.parent
     }
-    node = node.parent
   }
   return markup + '>'
 }
 
 export function createRenderFunction (
-  modules: Array<Function>,
+  modules: Array<(node: VNode) => ?string>,
   directives: Object,
   isUnaryTag: Function,
   cache: any
@@ -276,7 +426,12 @@ export function createRenderFunction (
       isUnaryTag, modules, directives,
       cache
     })
+    installSSRHelpers(component)
     normalizeRender(component)
-    renderNode(component._render(), true, context)
+
+    const resolve = () => {
+      renderNode(component._render(), true, context)
+    }
+    waitForServerPrefetch(component, resolve, done)
   }
 }

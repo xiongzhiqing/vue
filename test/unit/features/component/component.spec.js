@@ -106,10 +106,10 @@ describe('Component', () => {
       expect(vm.$el.outerHTML).toBe('<div view="view-b">bar b</div>')
       vm.view = ''
     })
-    .then(() => {
-      expect(vm.$el.nodeType).toBe(8)
-      expect(vm.$el.data).toBe('')
-    }).then(done)
+      .then(() => {
+        expect(vm.$el.nodeType).toBe(8)
+        expect(vm.$el.data).toBe('')
+      }).then(done)
   })
 
   it('dynamic with props', done => {
@@ -134,8 +134,7 @@ describe('Component', () => {
     waitForUpdate(() => {
       expect(vm.$el.outerHTML).toBe('<div>bar view-b</div>')
       vm.view = ''
-    })
-    .then(() => {
+    }).then(() => {
       expect(vm.$el.nodeType).toBe(8)
       expect(vm.$el.data).toBe('')
     }).then(done)
@@ -166,7 +165,7 @@ describe('Component', () => {
     const vm = new Vue({
       template:
         '<div>' +
-          '<component v-for="c in comps" :key="c.type" :is="c.type"></component>' +
+          '<component v-for="(c, i) in comps" :key="i" :is="c.type"></component>' +
         '</div>',
       data: {
         comps: [{ type: 'one' }, { type: 'two' }]
@@ -184,6 +183,25 @@ describe('Component', () => {
     vm.comps[1].type = 'one'
     waitForUpdate(() => {
       expect(vm.$el.innerHTML).toBe('<span>one</span><span>one</span>')
+    }).then(done)
+  })
+
+  it('dynamic elements with domProps', done => {
+    const vm = new Vue({
+      template: '<component :is="view" :value.prop="val"></component>',
+      data: {
+        view: 'input',
+        val: 'hello'
+      }
+    }).$mount()
+    expect(vm.$el.tagName).toBe('INPUT')
+    expect(vm.$el.value).toBe('hello')
+    vm.view = 'textarea'
+    vm.val += ' world'
+    waitForUpdate(() => {
+      expect(vm.$el.tagName).toBe('TEXTAREA')
+      expect(vm.$el.value).toBe('hello world')
+      vm.view = ''
     }).then(done)
   })
 

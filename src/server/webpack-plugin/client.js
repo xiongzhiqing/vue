@@ -1,5 +1,6 @@
 const hash = require('hash-sum')
-import { isJS } from './util'
+const uniq = require('lodash.uniq')
+import { isJS, isCSS, onEmit } from './util'
 
 export default class VueSSRClientPlugin {
   constructor (options = {}) {
@@ -9,26 +10,26 @@ export default class VueSSRClientPlugin {
   }
 
   apply (compiler) {
-    compiler.plugin('emit', (compilation, cb) => {
+    onEmit(compiler, 'vue-client-plugin', (compilation, cb) => {
       const stats = compilation.getStats().toJson()
 
-      const allFiles = stats.assets
-        .map(a => a.name)
+      const allFiles = uniq(stats.assets
+        .map(a => a.name))
 
-      const initialScripts = Object.keys(stats.entrypoints)
+      const initialFiles = uniq(Object.keys(stats.entrypoints)
         .map(name => stats.entrypoints[name].assets)
         .reduce((assets, all) => all.concat(assets), [])
-        .filter(isJS)
+        .filter((file) => isJS(file) || isCSS(file)))
 
-      const asyncScripts = allFiles
-        .filter(isJS)
-        .filter(file => initialScripts.indexOf(file) < 0)
+      const asyncFiles = allFiles
+        .filter((file) => isJS(file) || isCSS(file))
+        .filter(file => initialFiles.indexOf(file) < 0)
 
       const manifest = {
         publicPath: stats.publicPath,
         all: allFiles,
-        initial: initialScripts,
-        async: asyncScripts,
+        initial: initialFiles,
+        async: asyncFiles,
         modules: { /* [identifier: string]: Array<index: number> */ }
       }
 
@@ -39,7 +40,11 @@ export default class VueSSRClientPlugin {
         if (m.chunks.length === 1) {
           const cid = m.chunks[0]
           const chunk = stats.chunks.find(c => c.id === cid)
-          const files = manifest.modules[hash(m.identifier)] = chunk.files.map(fileToIndex)
+          if (!chunk || !chunk.files) {
+            return
+          }
+          const id = m.identifier.replace(/\s\w+$/, '') // remove appended hash
+          const files = manifest.modules[hash(id)] = chunk.files.map(fileToIndex)
           // find all asset modules associated with the same chunk
           assetModules.forEach(m => {
             if (m.chunks.some(id => id === cid)) {
@@ -48,12 +53,6 @@ export default class VueSSRClientPlugin {
           })
         }
       })
-
-      // const debug = (file, obj) => {
-      //   require('fs').writeFileSync(__dirname + '/' + file, JSON.stringify(obj, null, 2))
-      // }
-      // debug('stats.json', stats)
-      // debug('client-manifest.json', manifest)
 
       const json = JSON.stringify(manifest, null, 2)
       compilation.assets[this.options.filename] = {
